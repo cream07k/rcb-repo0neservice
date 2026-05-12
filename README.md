@@ -10,9 +10,9 @@ Windows performance optimization spec — designed to be installed by Claude Cod
    ติดตั้ง https://github.com/cream07k/rcb-repo0neservice
    ```
 3. Confirm when Claude asks
-4. Reboot when finished
+4. AI auto-reboots when finished (30-sec countdown, CTRL+C to cancel)
 
-Claude reads the spec files in this repo, detects your OS (Win10 / Win11 / custom build), adapts where needed, applies every value with backup + verify + restore support.
+Claude reads the spec files in this repo, detects your OS (Win10 / Win11 / custom build), adapts where needed, applies every value with backup + verify + auto-reboot + restore support.
 
 ## What it does
 
@@ -86,7 +86,9 @@ rcb-repo0neservice/
 │   ├── 15-services.md
 │   ├── 16-fivem.md
 │   ├── 17-advanced-kernel.md              # Opt-in
-│   └── 20-verification.md
+│   ├── 19-cleanup.md                      # Junk files + TRIM
+│   ├── 20-verification.md
+│   └── 99-reboot.md                       # Final reboot
 └── compatibility/                         # Per-OS overrides
     ├── win10.md
     ├── win11.md
