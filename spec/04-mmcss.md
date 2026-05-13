@@ -24,7 +24,7 @@ Path: `HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfi
 | Name | Type | Value |
 |------|------|-------|
 | GPU Priority | DWord | 8 |
-| Priority | DWord | 6 |
+| Priority | DWord | 8 |
 | Scheduling Category | String | "High" |
 | SFIO Priority | String | "High" |
 | Background Only | String | "False" |

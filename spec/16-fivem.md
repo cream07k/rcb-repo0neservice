@@ -23,7 +23,20 @@ net_compressionThreshold 1200
 profile_preferDefaultSpawnpoint 1
 profile_singleplayer_disablestream 1
 net_clientUpdateRate 50
+cl_inputBufferSize 1
+cl_predictBuffer 1
 ```
+
+## FiveM.exe runtime priority
+
+After FiveM launches, raise process priority to High so input/anim thread gets CPU first. Run on next launch via:
+
+```powershell
+$p = Get-Process FiveM -ErrorAction SilentlyContinue
+if ($p) { $p | ForEach-Object { try { $_.PriorityClass = 'High' } catch {} } }
+```
+
+Skip RealTime priority — it starves OS thread and causes audio crackle.
 
 ## Client-side density / LOD resource
 

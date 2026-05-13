@@ -23,7 +23,7 @@ Path: `HKCU:\Control Panel\Mouse`
 | DoubleClickWidth | String | "4" |
 | MouseHoverHeight | String | "4" |
 | MouseHoverWidth | String | "4" |
-| MouseHoverTime | String | "10" |
+| MouseHoverTime | String | "1" |
 | ActiveWindowTracking | DWord | 0 |
 
 ## Keyboard — max response
@@ -79,7 +79,7 @@ Path: `HKCU:\Control Panel\Desktop`
 | AutoEndTasks | String | "1" | 0 |
 | HungAppTimeout | String | "500" | 5000 |
 | WaitToKillAppTimeout | String | "1000" | 20000 |
-| LowLevelHooksTimeout | String | "500" | 5000 |
+| LowLevelHooksTimeout | String | "100" | 5000 |
 | ForegroundLockTimeout | DWord | 0 | 200000 |
 | ForegroundFlashCount | DWord | 0 | |
 | CaretWidth | DWord | 2 | |
@@ -91,3 +91,34 @@ Path: `HKLM:\SYSTEM\CurrentControlSet\Control`
 | Name | Type | Value | Default |
 |------|------|-------|---------|
 | WaitToKillServiceTimeout | String | "2000" | 5000 |
+
+## Driver queue depth — shorten input chain
+
+Lower queue = lower latency between physical click and event delivery. Default 100 → 20.
+
+Path: `HKLM:\SYSTEM\CurrentControlSet\Services\mouclass\Parameters`
+
+| Name | Type | Value | Default |
+|------|------|-------|---------|
+| MouseDataQueueSize | DWord | 20 | 100 |
+
+Path: `HKLM:\SYSTEM\CurrentControlSet\Services\kbdclass\Parameters`
+
+| Name | Type | Value | Default |
+|------|------|-------|---------|
+| KeyboardDataQueueSize | DWord | 20 | 100 |
+
+## HID idle off — no wake-up delay after pause
+
+```powershell
+Get-PnpDevice -Class HIDClass,Keyboard,Mouse -ErrorAction SilentlyContinue |
+    Where-Object Status -EQ 'OK' | ForEach-Object {
+        $p = "HKLM:\SYSTEM\CurrentControlSet\Enum\$($_.InstanceId)\Device Parameters"
+        if (Test-Path $p) {
+            New-ItemProperty -Path $p -Name 'IdleEnable' -Value 0 -PropertyType DWord -Force -ErrorAction SilentlyContinue | Out-Null
+            New-ItemProperty -Path $p -Name 'EnhancedPowerManagementEnabled' -Value 0 -PropertyType DWord -Force -ErrorAction SilentlyContinue | Out-Null
+        }
+    }
+```
+
+Prevents mouse/keyboard from entering selective suspend after a few seconds idle — kill that "first click feels laggy" feel.

@@ -54,3 +54,22 @@ Path: `HKCU:\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize`
 | Name | Type | Value |
 |------|------|-------|
 | EnableTransparency | DWord | 0 |
+
+## Cursor + mouse trails — kill DWM cursor compositing
+
+Path: `HKCU:\Control Panel\Cursors`
+
+| Name | Type | Value |
+|------|------|-------|
+| (Default) | String | "" |
+| Scheme Source | DWord | 0 |
+
+Path: `HKCU:\Control Panel\Mouse`
+
+| Name | Type | Value |
+|------|------|-------|
+| MouseTrails | String | "0" |
+| SmoothScroll | DWord | 0 |
+| SnapToDefaultButton | String | "0" |
+
+DWM doesn't need to composite a custom cursor bitmap → input thread shortcut.

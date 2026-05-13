@@ -15,7 +15,9 @@ Path: `HKLM:\SYSTEM\CurrentControlSet\Control\PriorityControl`
 | Name | Type | Value | Impact |
 |------|------|-------|--------|
 | Win32PrioritySeparation | DWord | 38 | Short quantum + 2x foreground boost |
+| IRQ1Priority | DWord | 1 | Keyboard IRQ priority (PS/2 + legacy emulated) |
 | IRQ8Priority | DWord | 1 | RTC IRQ priority |
+| IRQ12Priority | DWord | 1 | Mouse IRQ priority (PS/2 + legacy emulated) |
 | IRQ16Priority | DWord | 2 | GPU IRQ priority on some chipsets |
 
 Bit breakdown for Win32PrioritySeparation=38 (0x26):

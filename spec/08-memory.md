@@ -33,3 +33,18 @@ Path: `HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer`
 | Name | Type | Value |
 |------|------|-------|
 | AutoEndTasks | String | "1" |
+
+## MMAgent — RAM ≥ 16 GB only
+
+When physical RAM ≥ 16 GB, page compression hurts more than it helps (CPU cycles spent compressing/decompressing instead of just paging). Disable:
+
+```powershell
+if ($ram -ge 16) {
+    Disable-MMAgent -MemoryCompression -ErrorAction SilentlyContinue
+    Disable-MMAgent -PageCombining -ErrorAction SilentlyContinue
+    Disable-MMAgent -ApplicationLaunchPrefetching -ErrorAction SilentlyContinue
+    Disable-MMAgent -ApplicationPreLaunch -ErrorAction SilentlyContinue
+}
+```
+
+Skip on <16 GB systems — compression earns its keep when RAM is tight.
