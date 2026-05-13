@@ -11,4 +11,4 @@ Windows performance optimization spec — installed by Claude Code AI.
    ```
 3. Confirm when Claude asks
 
-Claude reads the spec, detects your OS, applies every value with backup + auto-reboot + restore.
+Claude runs `install.ps1` (self-elevates once). The script applies every value listed in `APPLY.md`, skipping anything already at target. Streaming log at `C:\WinPerf-Backup\install-<ts>.log`, heartbeat at `progress.json`. Reboot once after — no auto-reboot.

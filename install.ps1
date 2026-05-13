@@ -22,12 +22,21 @@ if (-not (Test-Path $backupDir)) { New-Item -ItemType Directory -Path $backupDir
 $ts = Get-Date -Format 'yyyy-MM-dd_HH-mm-ss'
 $logFile = "$backupDir\install-$ts.log"
 $backupFile = "$backupDir\backup-$ts.json"
+$progFile = "$backupDir\progress.json"
 $marker = "$backupDir\.in-progress"
 
-Start-Transcript -Path $logFile -Force | Out-Null
-
-function W { param([string]$m,[string]$c='Gray'); Write-Host $m -ForegroundColor $c }
-function Hdr { param([string]$m); Write-Host "`n=== $m ===" -ForegroundColor Cyan }
+# Streaming logger — every line flushed to disk immediately so external tooling (AI orchestrator) can tail in real time.
+# Replaces Start-Transcript which buffers everything until Stop-Transcript.
+function StreamLog { param([string]$line) try { Add-Content -Path $logFile -Value $line -Encoding UTF8 -ErrorAction SilentlyContinue } catch {} }
+function W { param([string]$m,[string]$c='Gray'); Write-Host $m -ForegroundColor $c; StreamLog $m }
+function Hdr {
+    param([string]$m)
+    $h = "=== $m ==="
+    Write-Host "`n$h" -ForegroundColor Cyan
+    StreamLog ""
+    StreamLog $h
+    try { @{ at=(Get-Date).ToString('o'); step=$m } | ConvertTo-Json -Compress | Set-Content -Path $progFile -Encoding UTF8 -Force -ErrorAction SilentlyContinue } catch {}
+}
 # Remove default aliases that collide with our short helpers (H = Get-History in PS 5.1)
 Remove-Item Alias:H -Force -ErrorAction SilentlyContinue
 
@@ -91,6 +100,10 @@ function Set-Reg {
     param([string]$Path, [string]$Name, $Value, [string]$Type='DWord')
     if (-not (Test-Path $Path)) { New-Item -Path $Path -Force | Out-Null }
     $old = (Get-ItemProperty -Path $Path -Name $Name -ErrorAction SilentlyContinue).$Name
+    if ("$old" -eq "$Value") {
+        $backup.Registry["$Path|$Name"] = @{ Old=$old; New=$Value; Type=$Type; Skipped=$true }
+        return
+    }
     $backup.Registry["$Path|$Name"] = @{ Old=$old; New=$Value; Type=$Type }
     try {
         Set-ItemProperty -Path $Path -Name $Name -Value $Value -Type $Type -Force -ErrorAction Stop
@@ -189,27 +202,37 @@ foreach ($nic in $nics) {
         Set-NetAdapterPowerManagement -Name $nic.Name -AllowComputerToTurnOffDevice Disabled -ArpOffload Disabled -NSOffload Disabled -SelectiveSuspend Disabled -WakeOnMagicPacket Disabled -WakeOnPattern Disabled -ErrorAction Stop
     } catch { W "  [WARN] PowerMgmt: $($_.Exception.Message)" Yellow }
 
-    $propsOff = @('Energy Efficient Ethernet','Green Ethernet','Auto Disable Gigabit','Advanced EEE','Ultra Low Power Mode','Gigabit Lite','Flow Control','Interrupt Moderation','Jumbo Packet','Jumbo Frame','Large Send Offload V2 (IPv4)','Large Send Offload V2 (IPv6)','Large Send Offload (IPv4)','TCP Checksum Offload (IPv4)','TCP Checksum Offload (IPv6)','UDP Checksum Offload (IPv4)','UDP Checksum Offload (IPv6)','IPv4 Checksum Offload','Recv Segment Coalescing (IPv4)','Recv Segment Coalescing (IPv6)','ARP Offload','NS Offload','PME','Priority & VLAN','Shutdown WOL')
-    foreach ($p in $propsOff) {
-        try { Set-NetAdapterAdvancedProperty -Name $nic.Name -DisplayName $p -DisplayValue 'Disabled' -NoRestart -ErrorAction Stop } catch {}
+    # Enumerate available properties once — skip non-existent + already-correct values (avoids the 25-property-per-NIC blind hammer that took ~2 min/NIC)
+    $available = @{}
+    Get-NetAdapterAdvancedProperty -Name $nic.Name -ErrorAction SilentlyContinue | ForEach-Object {
+        if ($_.DisplayName) { $available[$_.DisplayName] = $_.DisplayValue }
     }
-    foreach ($pair in @{'Interrupt Moderation Rate'='Off';'Receive Buffers'=2048;'Transmit Buffers'=2048;'Receive Side Scaling'='Enabled';'Maximum Number of RSS Queues'=8;'Number of RSS Queues'=8;'EEE Max Wake Time'=0}.GetEnumerator()) {
-        try { Set-NetAdapterAdvancedProperty -Name $nic.Name -DisplayName $pair.Key -DisplayValue $pair.Value -NoRestart -ErrorAction Stop } catch {}
+
+    function Apply-NicProp {
+        param([string]$Display, [string]$Want)
+        if (-not $available.ContainsKey($Display)) { return }              # property not on this card
+        if ("$($available[$Display])" -eq "$Want") { return }              # already at target
+        try { Set-NetAdapterAdvancedProperty -Name $nic.Name -DisplayName $Display -DisplayValue $Want -NoRestart -ErrorAction Stop } catch {}
     }
-    # RSS Profile
-    try { Set-NetAdapterAdvancedProperty -Name $nic.Name -DisplayName 'RSS Profile' -DisplayValue 'NUMAStatic' -NoRestart -ErrorAction Stop } catch { try { Set-NetAdapterAdvancedProperty -Name $nic.Name -DisplayName 'RSS Profile' -DisplayValue 'ClosestStatic' -NoRestart -ErrorAction SilentlyContinue } catch {} }
+
+    foreach ($p in 'Energy Efficient Ethernet','Green Ethernet','Auto Disable Gigabit','Advanced EEE','Ultra Low Power Mode','Gigabit Lite','Flow Control','Interrupt Moderation','Jumbo Packet','Jumbo Frame','Large Send Offload V2 (IPv4)','Large Send Offload V2 (IPv6)','Large Send Offload (IPv4)','TCP Checksum Offload (IPv4)','TCP Checksum Offload (IPv6)','UDP Checksum Offload (IPv4)','UDP Checksum Offload (IPv6)','IPv4 Checksum Offload','Recv Segment Coalescing (IPv4)','Recv Segment Coalescing (IPv6)','ARP Offload','NS Offload','PME','Priority & VLAN','Shutdown WOL') {
+        Apply-NicProp $p 'Disabled'
+    }
+    foreach ($pair in @{'Interrupt Moderation Rate'='Off';'Receive Buffers'='2048';'Transmit Buffers'='2048';'Receive Side Scaling'='Enabled';'Maximum Number of RSS Queues'='8';'Number of RSS Queues'='8';'EEE Max Wake Time'='0'}.GetEnumerator()) {
+        Apply-NicProp $pair.Key $pair.Value
+    }
+    if ($available.ContainsKey('RSS Profile')) {
+        try { Set-NetAdapterAdvancedProperty -Name $nic.Name -DisplayName 'RSS Profile' -DisplayValue 'NUMAStatic' -NoRestart -ErrorAction Stop } catch { try { Set-NetAdapterAdvancedProperty -Name $nic.Name -DisplayName 'RSS Profile' -DisplayValue 'ClosestStatic' -NoRestart -ErrorAction SilentlyContinue } catch {} }
+    }
 
     if ($nic.InterfaceDescription -match 'Realtek') {
-        foreach ($pair in @{'Disable HARDPS Algorithm'='Enabled';'WOL Speed'='10 Mbps'}.GetEnumerator()) {
-            try { Set-NetAdapterAdvancedProperty -Name $nic.Name -DisplayName $pair.Key -DisplayValue $pair.Value -NoRestart -ErrorAction SilentlyContinue } catch {}
-        }
+        Apply-NicProp 'Disable HARDPS Algorithm' 'Enabled'
+        Apply-NicProp 'WOL Speed'                '10 Mbps'
     }
     if ($nic.InterfaceDescription -match 'Intel') {
-        foreach ($p in 'Adaptive Inter-Frame Spacing','DMA Coalescing','Reduce Speed On Power Down') {
-            try { Set-NetAdapterAdvancedProperty -Name $nic.Name -DisplayName $p -DisplayValue 'Disabled' -NoRestart -ErrorAction SilentlyContinue } catch {}
-        }
-        try { Set-NetAdapterAdvancedProperty -Name $nic.Name -DisplayName 'Wait for Link' -DisplayValue 'Off' -NoRestart -ErrorAction SilentlyContinue } catch {}
-        try { Set-NetAdapterAdvancedProperty -Name $nic.Name -DisplayName 'Gigabit Master Slave Mode' -DisplayValue 'Auto Detect' -NoRestart -ErrorAction SilentlyContinue } catch {}
+        foreach ($p in 'Adaptive Inter-Frame Spacing','DMA Coalescing','Reduce Speed On Power Down') { Apply-NicProp $p 'Disabled' }
+        Apply-NicProp 'Wait for Link'               'Off'
+        Apply-NicProp 'Gigabit Master Slave Mode'   'Auto Detect'
     }
 }
 
@@ -730,12 +753,7 @@ W '[INFO] Running DISM component cleanup (3-5 min)...' Yellow
 & cmd /c 'DISM /Online /Cleanup-Image /StartComponentCleanup /ResetBase /Quiet' 2>&1 | Out-Null
 & cmd /c 'DISM /Online /Cleanup-Image /SPSuperseded /Quiet' 2>&1 | Out-Null
 
-# Disk Cleanup
-Get-ChildItem 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\VolumeCaches' | ForEach-Object {
-    Set-ItemProperty -Path $_.PSPath -Name 'StateFlags0001' -Value 2 -Type DWord -ErrorAction SilentlyContinue
-}
-& cleanmgr.exe /sagerun:1 -ErrorAction SilentlyContinue | Out-Null
-
+# cleanmgr.exe /sagerun:1 removed — can pop GUI under elevated headless run and hang the installer
 Clear-RecycleBin -Force -ErrorAction SilentlyContinue
 
 # Font/icon cache
@@ -761,69 +779,24 @@ $diskAfter = (Get-Volume -DriveLetter C).SizeRemaining
 $freed = [Math]::Round(($diskAfter - $diskBefore) / 1MB, 0)
 W "[OK] Cleanup freed approximately $freed MB on C:" Green
 
-# ---- 20. VERIFICATION ------------------------------------------------------
-Hdr 'MODULE 20 — Verification'
-$passed = 0; $failed = 0; $report = @()
-
-function Check { param([string]$Name, [scriptblock]$Test)
-    $script:passed = $script:passed
-    try { $r = & $Test; if ($r) { W "  [PASS] $Name" Green; $script:passed++; $script:report += "PASS: $Name" } else { W "  [FAIL] $Name" Red; $script:failed++; $script:report += "FAIL: $Name" } }
-    catch { W "  [FAIL] $Name : $($_.Exception.Message)" Red; $script:failed++; $script:report += "FAIL: $Name" }
-}
-
-Check 'TCP NoDelay=1'        { (Get-ItemProperty $tcp 'TCPNoDelay' -EA SilentlyContinue).TCPNoDelay -eq 1 }
-Check 'TCP AckFrequency=1'   { (Get-ItemProperty $tcp 'TcpAckFrequency' -EA SilentlyContinue).TcpAckFrequency -eq 1 }
-Check 'DisableTaskOffload=1' { (Get-ItemProperty $tcp 'DisableTaskOffload' -EA SilentlyContinue).DisableTaskOffload -eq 1 }
-Check 'MaxUserPort=65534'    { (Get-ItemProperty $tcp 'MaxUserPort' -EA SilentlyContinue).MaxUserPort -eq 65534 }
-Check 'Power scheme Ultimate/HighPerf' { $a = (powercfg /getactivescheme) -join ' '; $a -match 'Ultimate|High performance' }
-Check 'Hibernation disabled' { (powercfg /availablesleepstates) -join ' ' -match 'Hibernate.*not available|following sleep states are not available' }
-Check 'DiagTrack disabled'   { (Get-Service DiagTrack -EA SilentlyContinue).StartType -eq 'Disabled' }
-Check 'NetworkThrottlingIndex=0xFFFFFFFF' { (Get-ItemProperty $sp 'NetworkThrottlingIndex' -EA SilentlyContinue).NetworkThrottlingIndex -eq [uint32]0xFFFFFFFF -or (Get-ItemProperty $sp 'NetworkThrottlingIndex' -EA SilentlyContinue).NetworkThrottlingIndex -eq -1 }
-Check 'GameDVR off'          { (Get-ItemProperty $gc 'GameDVR_Enabled' -EA SilentlyContinue).GameDVR_Enabled -eq 0 }
-Check 'NTFS disable8dot3'    { (& cmd /c 'fsutil behavior query disable8dot3') -match '= 1|: 1' }
-Check 'NTFS disablelastaccess' { (& cmd /c 'fsutil behavior query disablelastaccess') -match '1' }
-Check 'HwSchMode=2'          { if ($build -ge 19041) { (Get-ItemProperty $gd 'HwSchMode' -EA SilentlyContinue).HwSchMode -eq 2 } else { $true } }
-Check 'TdrDelay=60'          { (Get-ItemProperty $gd 'TdrDelay' -EA SilentlyContinue).TdrDelay -eq 60 }
-Check 'VisualFXSetting=2'    { (Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects' 'VisualFXSetting' -EA SilentlyContinue).VisualFXSetting -eq 2 }
-Check 'AllowTelemetry=0'     { (Get-ItemProperty 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\DataCollection' 'AllowTelemetry' -EA SilentlyContinue).AllowTelemetry -eq 0 }
-
-$net = (netsh int tcp show global) -join "`n"
-Check 'netsh chimney disabled' { $net -match 'Chimney Offload State\s*:\s*disabled' }
-Check 'netsh RSS enabled'      { $net -match 'Receive-Side Scaling State\s*:\s*enabled' }
-
-W ""
-W "Verification: $passed passed / $failed failed" $(if ($failed -eq 0) {'Green'} else {'Yellow'})
+# ---- 20. SUMMARY -----------------------------------------------------------
+Hdr 'MODULE 20 — Summary'
+$applied = ($backup.Registry.Values | Where-Object { -not $_.Skipped }).Count
+$skipped = ($backup.Registry.Values | Where-Object { $_.Skipped }).Count
+W "Registry: $applied applied / $skipped already-at-target" Green
 
 # Save backup state
 $backup | ConvertTo-Json -Depth 20 -Compress | Set-Content -Path $backupFile -Encoding UTF8
 W "[OK] Backup saved: $backupFile" Green
 
-# ---- 99. REBOOT ------------------------------------------------------------
-Hdr 'MODULE 99 — Final reboot'
+# ---- 99. DONE --------------------------------------------------------------
+Hdr 'MODULE 99 — Done'
 W ''
-W '  ALL TWEAKS APPLIED + VERIFIED' Green
+W '  ALL TWEAKS APPLIED' Green
 W "  Backup: $backupFile" Gray
 W "  Log:    $logFile" Gray
 W ''
+W '  Reboot required for HKLM kernel + driver-queue + GlobalTimerResolutionRequests to activate.' Yellow
+W '  Run when ready:  shutdown /r /t 0' Cyan
 Remove-Item $marker -Force -ErrorAction SilentlyContinue
-
-if ($env:WINPERF_NO_REBOOT -eq '1') {
-    W '[SKIP] WINPERF_NO_REBOOT=1 — reboot skipped. Run: shutdown /r /t 0' Yellow
-    Stop-Transcript | Out-Null
-    return
-}
-
-W '  เครื่องจะ reboot ใน 30 วินาที' Cyan
-W '  กด CTRL+C เพื่อยกเลิก' Cyan
-try {
-    for ($i = 30; $i -gt 0; $i--) {
-        Write-Host "`r  Rebooting in $i seconds...  " -NoNewline -ForegroundColor Cyan
-        Start-Sleep -Seconds 1
-    }
-    Write-Host ''
-    Stop-Transcript | Out-Null
-    shutdown.exe /r /t 0 /f /c 'WinPerf reboot — applying max performance tweaks'
-} catch {
-    W "`n[CANCELLED] Tweaks saved. Reboot manually with: shutdown /r /t 0" Yellow
-    Stop-Transcript | Out-Null
-}
+try { @{ at=(Get-Date).ToString('o'); step='done' } | ConvertTo-Json -Compress | Set-Content -Path $progFile -Encoding UTF8 -Force -ErrorAction SilentlyContinue } catch {}

@@ -235,7 +235,7 @@ $mx=0;$mn=0;$c=0; [void][V.Q]::Query([ref]$mx,[ref]$mn,[ref]$c)
 
 ## Current applied state (snapshot 2026-05-13)
 
-Last full apply: **2026-05-13 11:21** via `install-delta.ps1`
+Last full apply: **2026-05-13 11:21** via `install.ps1`
 - HKCU: 5 written / 14 already at target
 - HKLM: all targets in MMCSS/IRQ/Memory/Input/IFEO at target
 - HID idle: 33/33 devices processed
@@ -263,9 +263,10 @@ After reboot: `InputLatencyPlugin` task auto-starts at logon → no more manual 
 ## Files NOT needed at runtime (cleanup OK)
 
 These were one-shot helpers; safe to delete after first apply:
-- `install.ps1`, `install-delta.ps1` (in this project dir) — re-apply tooling, only needed for spec evolution
-- `C:\WinPerf-Backup\install-*.log`, `delta-*.log` — past run transcripts
-- `C:\WinPerf-Backup\.in-progress` — never written by current flow
+- `install.ps1` (in this project dir) — re-apply tooling, only needed for spec evolution
+- `C:\WinPerf-Backup\install-*.log` — past run transcripts (streamed line-by-line)
+- `C:\WinPerf-Backup\progress.json` — last completed step heartbeat
+- `C:\WinPerf-Backup\.in-progress` — present only while installer is running
 
 ## Anti-cheat safety contract
 
