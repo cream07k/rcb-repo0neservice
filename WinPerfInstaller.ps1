@@ -47,15 +47,27 @@ $ApplyScript = {
     $ErrorActionPreference = 'Continue'
     $ProgressPreference = 'SilentlyContinue'
 
+    # ---- Disk log paths (set up first so Log can stream to file) -------
+    $backupDir = 'C:\WinPerf-Backup'
+    if (-not (Test-Path $backupDir)) { New-Item -ItemType Directory -Path $backupDir -Force | Out-Null }
+    $ts = Get-Date -Format 'yyyy-MM-dd_HH-mm-ss'
+    $logFile = "$backupDir\install-$ts.log"
+    $progFile = "$backupDir\progress.json"
+    $marker   = "$backupDir\.in-progress"
+    $Sync.BackupFile = "$backupDir\backup-$ts.json"
+    Set-Content -Path $marker -Value $ts -Force -ErrorAction SilentlyContinue
+
     # ---- Helpers (defined inside runspace) -----------------------------
     function Log {
         param([string]$Msg, [string]$Level='info')
+        $stamp = (Get-Date).ToString('HH:mm:ss.fff')
         $entry = @{
-            ts    = (Get-Date).ToString('HH:mm:ss.fff')
+            ts    = $stamp
             msg   = $Msg
             level = $Level
         }
         [void]$Sync.LogLines.Add($entry)
+        try { Add-Content -Path $logFile -Value "$stamp [$Level] $Msg" -Encoding UTF8 -ErrorAction SilentlyContinue } catch {}
     }
 
     function Step {
@@ -63,6 +75,11 @@ $ApplyScript = {
         $Sync.StepIdx++
         $Sync.StepName = $Name
         Log "=== $Name ===" 'step'
+        try {
+            @{ at=(Get-Date).ToString('o'); step=$Name; idx=$Sync.StepIdx } |
+                ConvertTo-Json -Compress |
+                Set-Content -Path $progFile -Encoding UTF8 -Force -ErrorAction SilentlyContinue
+        } catch {}
     }
 
     $script:Backup = [ordered]@{ Registry=@{}; Services=@{}; NetSH=@(); FSUtil=@(); BCD=@() }
@@ -126,11 +143,7 @@ $ApplyScript = {
         $ramGB = [Math]::Round($os.TotalVisibleMemorySize / 1MB, 0)
         $hasFiveM = Test-Path "$env:LOCALAPPDATA\FiveM\FiveM.exe"
         Log "OS=Win$(if($build -ge 22000){11}else{10}) build=$build  CPU=$cpuCores cores  RAM=${ramGB}GB  FiveM=$hasFiveM"
-
-        $backupDir = 'C:\WinPerf-Backup'
-        if (-not (Test-Path $backupDir)) { New-Item -ItemType Directory -Path $backupDir -Force | Out-Null }
-        $ts = Get-Date -Format 'yyyy-MM-dd_HH-mm-ss'
-        $Sync.BackupFile = "$backupDir\backup-$ts.json"
+        Log "log file: $logFile"
 
         # === [2/23] HKCU registry ==================================
         Step 'HKCU registry (per-user)'
@@ -555,6 +568,8 @@ while ($true) {
         $Sync.ErrorMsg = $_.Exception.Message
         Log "FATAL: $($_.Exception.Message)" 'error'
         $Sync.EndedAt = Get-Date
+    } finally {
+        Remove-Item $marker -Force -ErrorAction SilentlyContinue
     }
 }
 
