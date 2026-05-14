@@ -653,9 +653,87 @@ if ($hasFiveM) {
     W '[SKIP] FiveM not installed' DarkGray
 }
 
-# ---- 17. ADVANCED KERNEL — SKIPPED -----------------------------------------
-Hdr 'MODULE 17 — Advanced kernel'
-W "[SKIP] requires 'ยืนยัน advanced' phrase — not applied this run" Yellow
+# ---- 17. ADVANCED KERNEL (BCD edits) ---------------------------------------
+Hdr 'MODULE 17 — Advanced kernel (BCD)'
+W '[NOTE] BCD edits apply at next boot. Reboot required.' Yellow
+$bcdSet = @(
+    'useplatformclock no',
+    'useplatformtick yes',
+    'disabledynamictick yes',
+    'x2apicpolicy enable',
+    'uselegacyapicmode no',
+    'tscsyncpolicy legacy',
+    'tpmbootentropy ForceDisable'
+)
+foreach ($c in $bcdSet) {
+    $r = & cmd /c "bcdedit /set $c 2>&1"
+    $backup.PowerCfg += "bcdedit /set $c -> $($r -join ' ')"
+    W "  bcdedit /set $c" DarkGray
+}
+# hypervisorlaunchtype off — disables Hyper-V. BREAKS Vanguard (vgc) on Win11 22H2+.
+# Opt-in via env var to avoid bricking Valorant by accident.
+if ($env:WINPERF_DISABLE_HYPERV -eq '1') {
+    $r = & cmd /c "bcdedit /set hypervisorlaunchtype off 2>&1"
+    $backup.PowerCfg += "bcdedit /set hypervisorlaunchtype off -> $($r -join ' ')"
+    W "  bcdedit /set hypervisorlaunchtype off (WINPERF_DISABLE_HYPERV=1)" Yellow
+} else {
+    W "  [SKIP] hypervisorlaunchtype off — set WINPERF_DISABLE_HYPERV=1 to enable (breaks Vanguard)" DarkGray
+}
+
+# ---- 17B. LATENCY-BOOST EXTRAS (from user spec collection) -----------------
+Hdr 'MODULE 17B — Latency-boost extras'
+
+# Mouse curve = zero (linear, no smoothing curve)
+$smoothZero = New-Object byte[] 40
+Set-Reg 'HKCU:\Control Panel\Mouse' 'SmoothMouseXCurve' $smoothZero 'Binary'
+Set-Reg 'HKCU:\Control Panel\Mouse' 'SmoothMouseYCurve' $smoothZero 'Binary'
+
+# Cursor blink off
+Set-Reg 'HKCU:\Control Panel\Desktop' 'CursorBlinkRate' '-1' 'String'
+
+# Zero startup app delay
+Set-Reg 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Serialize' 'Startupdelayinmsec' 0
+
+# DirectX max frame latency = 1 frame
+Set-Reg 'HKLM:\SOFTWARE\Microsoft\DirectX' 'MaxFrameLatency' 1
+
+# DXGKrnl monitor latency tolerance
+Set-Reg 'HKLM:\SYSTEM\CurrentControlSet\Services\DXGKrnl' 'MonitorLatencyTolerance' 1
+Set-Reg 'HKLM:\SYSTEM\CurrentControlSet\Services\DXGKrnl' 'MonitorRefreshLatencyTolerance' 1
+
+# GPU energy driver — spread timers
+Set-Reg 'HKLM:\SYSTEM\CurrentControlSet\Services\GpuEnergyDrv' 'DistributeTimers' 1
+
+# USB selective suspend OFF (HID/USB stay awake — kills first-click wake delay)
+Set-Reg 'HKLM:\SYSTEM\CurrentControlSet\Services\USB' 'DisableSelectiveSuspend' 1
+Set-Reg 'HKLM:\SYSTEM\CurrentControlSet\Services\HidUsb\Parameters' 'EnhancedPowerManagementEnabled' 0
+Set-Reg 'HKLM:\SYSTEM\CurrentControlSet\Services\HidUsb\Parameters' 'SelectiveSuspendEnabled' 0
+
+# Power Throttling OFF (Win10 1709+ feature — throttles background CPU)
+Set-Reg 'HKLM:\SYSTEM\CurrentControlSet\Control\Power\PowerThrottling' 'PowerThrottlingOff' 1
+
+# Spectre/Meltdown mitigations OFF (perf > side-channel security tradeoff)
+Set-Reg 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management' 'FeatureSettingsOverride' 3
+Set-Reg 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management' 'FeatureSettingsOverrideMask' 3
+
+# Prefetcher OFF (SuperFetch service already disabled via service list; this kills the registry switch too)
+Set-Reg 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management\PrefetchParameters' 'EnablePrefetcher' 0
+
+# NetBT + TimeBroker — disable via service start type
+Set-Reg 'HKLM:\SYSTEM\CurrentControlSet\services\NetBT' 'Start' 4
+Set-Reg 'HKLM:\SYSTEM\CurrentControlSet\Services\TimeBroker' 'Start' 4
+
+# Automatic Maintenance OFF
+Set-Reg 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Schedule\Maintenance' 'MaintenanceDisabled' 1
+
+# Notification Center OFF (Action Center)
+Set-Reg 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\Explorer' 'DisableNotificationCenter' 1
+
+# csrss.exe RealTime priority (AGGRESSIVE — system kernel process at RealTime)
+$csrssPerf = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\csrss.exe\PerfOptions'
+Set-Reg $csrssPerf 'CpuPriorityClass' 4
+Set-Reg $csrssPerf 'IoPriority' 3
+W '[OK] csrss.exe -> RealTime (CpuPriorityClass=4)' Green
 
 # ---- 18. PROCESS PINNING (FiveM IFEO + helper) -----------------------------
 Hdr 'MODULE 18 — Process pinning (IFEO + timer res helper)'

@@ -21,7 +21,7 @@ When user says "apply APPLY.md" or similar:
 5. **Verify** — re-read every value listed below; report pass/fail count.
 6. **Tell user to reboot once** if any HKLM/IRQ/driver-queue value changed.
 
-Never apply Module 17 (advanced kernel) — vgc is present.
+Module 17 (BCD kernel edits) IS now applied per user opt-in. The Hyper-V disable (`hypervisorlaunchtype off`) is the only sub-tweak still gated — it breaks Vanguard. See "Aggressive latency extras" section below.
 
 ## HKCU registry (per-user, no elevation)
 
@@ -113,7 +113,7 @@ Path: `HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution O
 | `IoPriority` | DWord | `3` | High |
 | `PagePriority` | DWord | `5` | Normal+1 |
 
-`CpuPriorityClass=4` (RealTime) is FORBIDDEN — starves audio + kernel.
+`CpuPriorityClass=4` (RealTime) on FiveM images is FORBIDDEN — starves audio + kernel. (For `csrss.exe` it IS used — see Aggressive section below.)
 
 ## MMAgent (needs admin, RAM >= 16GB only)
 
@@ -268,11 +268,76 @@ These were one-shot helpers; safe to delete after first apply:
 - `C:\WinPerf-Backup\progress.json` — last completed step heartbeat
 - `C:\WinPerf-Backup\.in-progress` — present only while installer is running
 
+## Aggressive latency extras (curated from user spec — 2026-05-14)
+
+User explicitly opted into aggressive tuning ("no need to worry about safety"). The following are applied by `install.ps1` on top of the base spec above.
+
+### Extra HKCU
+| Path | Name | Type | Value | Meaning |
+|---|---|---|---|---|
+| `HKCU:\Control Panel\Mouse` | `SmoothMouseXCurve` | Binary | 40× `0x00` | force linear, no accel curve |
+| `HKCU:\Control Panel\Mouse` | `SmoothMouseYCurve` | Binary | 40× `0x00` | force linear, no accel curve |
+| `HKCU:\Control Panel\Desktop` | `CursorBlinkRate` | String | `-1` | disable cursor blink |
+| `HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Serialize` | `Startupdelayinmsec` | DWord | `0` | zero startup-app delay |
+
+### Extra HKLM — GPU / DirectX latency
+| Path | Name | Type | Value |
+|---|---|---|---|
+| `HKLM:\SOFTWARE\Microsoft\DirectX` | `MaxFrameLatency` | DWord | `1` |
+| `HKLM:\SYSTEM\CurrentControlSet\Services\DXGKrnl` | `MonitorLatencyTolerance` | DWord | `1` |
+| `HKLM:\SYSTEM\CurrentControlSet\Services\DXGKrnl` | `MonitorRefreshLatencyTolerance` | DWord | `1` |
+| `HKLM:\SYSTEM\CurrentControlSet\Services\GpuEnergyDrv` | `DistributeTimers` | DWord | `1` |
+
+### Extra HKLM — USB / HID power
+| Path | Name | Type | Value |
+|---|---|---|---|
+| `HKLM:\SYSTEM\CurrentControlSet\Services\USB` | `DisableSelectiveSuspend` | DWord | `1` |
+| `HKLM:\SYSTEM\CurrentControlSet\Services\HidUsb\Parameters` | `EnhancedPowerManagementEnabled` | DWord | `0` |
+| `HKLM:\SYSTEM\CurrentControlSet\Services\HidUsb\Parameters` | `SelectiveSuspendEnabled` | DWord | `0` |
+
+### Extra HKLM — Aggressive system tweaks
+| Path | Name | Type | Value | Meaning |
+|---|---|---|---|---|
+| `HKLM:\SYSTEM\CurrentControlSet\Control\Power\PowerThrottling` | `PowerThrottlingOff` | DWord | `1` | disable Win10/11 power throttling |
+| `HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management` | `FeatureSettingsOverride` | DWord | `3` | Spectre/Meltdown mitigations OFF |
+| `HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management` | `FeatureSettingsOverrideMask` | DWord | `3` | (paired with above) |
+| `HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management\PrefetchParameters` | `EnablePrefetcher` | DWord | `0` | Prefetcher off |
+| `HKLM:\SYSTEM\CurrentControlSet\services\NetBT` | `Start` | DWord | `4` | NetBIOS over TCP disabled |
+| `HKLM:\SYSTEM\CurrentControlSet\Services\TimeBroker` | `Start` | DWord | `4` | TimeBroker service disabled |
+| `HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Schedule\Maintenance` | `MaintenanceDisabled` | DWord | `1` | automatic maintenance off |
+| `HKLM:\SOFTWARE\Policies\Microsoft\Windows\Explorer` | `DisableNotificationCenter` | DWord | `1` | Action Center off |
+
+### csrss.exe IFEO — RealTime priority
+Path: `HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\csrss.exe\PerfOptions`
+
+| Name | Type | Value | Meaning |
+|---|---|---|---|
+| `CpuPriorityClass` | DWord | `4` | RealTime (system process; intentional) |
+| `IoPriority` | DWord | `3` | High |
+
+⚠️ Differs from the FiveM IFEO rule above. csrss.exe IS allowed at RealTime — it's a kernel-side process and benefits from it.
+
+### Module 17 — BCD (boot) edits
+Applied via `bcdedit /set` — require reboot to take effect.
+
+| Command | Effect |
+|---|---|
+| `bcdedit /set useplatformclock no` | use TSC-based timer, not HPET |
+| `bcdedit /set useplatformtick yes` | hardware ticks |
+| `bcdedit /set disabledynamictick yes` | constant tick rate |
+| `bcdedit /set x2apicpolicy enable` | x2APIC = more IRQ vectors, lower interrupt latency |
+| `bcdedit /set uselegacyapicmode no` | (paired with above) |
+| `bcdedit /set tscsyncpolicy legacy` | trust BIOS TSC sync — fewer kernel sync calls |
+| `bcdedit /set tpmbootentropy ForceDisable` | skip TPM at boot — faster boot |
+
+**Opt-in only** (set env var `WINPERF_DISABLE_HYPERV=1` before running):
+- `bcdedit /set hypervisorlaunchtype off` — disables Hyper-V. **BREAKS Vanguard (vgc) on Win11 22H2+**. Valorant will refuse to launch. Re-enable with `bcdedit /set hypervisorlaunchtype auto` + reboot.
+
 ## Anti-cheat safety contract
 
-Never disable services in this list (anti-cheat + core OS):
-`WinDefend`, `MpsSvc`, `wuauserv`, `BFE`, `EventLog`, `Sense`, `SecurityHealthService`, `SgrmBroker`, `vgc`, `vgk`, `EasyAntiCheat`, `EasyAntiCheat_EOS`, `BEService`, `BEDaisy`, `FACEITService`, `DcomLaunch`, `RpcEptMapper`, `RpcSs`, `LSM`, `Power`, `PlugPlay`
+Never disable services in this list:
+`vgc`, `vgk`, `EasyAntiCheat`, `EasyAntiCheat_EOS`, `BEService`, `BEDaisy`, `FACEITService`, `DcomLaunch`, `RpcEptMapper`, `RpcSs`, `LSM`, `Power`, `PlugPlay`, `BFE`, `EventLog`
 
-Module 17 (advanced kernel) is permanently disabled because `vgc` (Valorant Vanguard) is present.
+Other Defender/Security services (`WinDefend`, `MpsSvc`, `Sense`, `SecurityHealthService`, `SgrmBroker`, `wuauserv`) are NOT disabled by the current service list, but no longer treated as untouchable — user opted into aggressive mode.
 
 Daemon affinity-pin and priority-bump are anti-cheat-safe (read-only inspection + standard `Process.PriorityClass` / `Process.ProcessorAffinity` from the user's own session, no DLL injection).
