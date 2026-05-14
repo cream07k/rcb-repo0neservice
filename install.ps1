@@ -125,10 +125,10 @@ function Disable-SvcSafe {
     try { Set-Service -Name $Name -StartupType Disabled -ErrorAction Stop; W "  [DISABLED] $Name" Green } catch { W "  [FAIL] $Name : $($_.Exception.Message)" Red }
 }
 
-function Run-Netsh { param([string]$Args)
-    $r = & cmd /c "netsh $Args 2>&1"
-    $backup.NetSH += "$Args -> $($r -join ' ')"
-    W "  netsh $Args" DarkGray
+function Run-Netsh { param([string]$Cmd)
+    W "  netsh $Cmd" DarkGray
+    $r = & cmd /c "netsh $Cmd 2>&1"
+    $backup.NetSH += "$Cmd -> $($r -join ' ')"
 }
 
 # ---- 01. TCP/IP STACK ------------------------------------------------------

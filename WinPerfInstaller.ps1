@@ -108,10 +108,10 @@ $ApplyScript = {
     }
 
     function Run-Netsh {
-        param([string]$Args)
-        Log "netsh $Args"
-        $r = & cmd /c "netsh $Args 2>&1"
-        $script:Backup.NetSH += "$Args -> $($r -join ' ')"
+        param([string]$Cmd)
+        Log "netsh $Cmd"
+        $r = & cmd /c "netsh $Cmd 2>&1"
+        $script:Backup.NetSH += "$Cmd -> $($r -join ' ')"
     }
 
     try {
