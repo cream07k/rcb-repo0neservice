@@ -33,7 +33,8 @@ $Sync = [hashtable]::Synchronized(@{
     AppliedKeys  = 0
     SkippedKeys  = 0
     ErrorMsg     = $null
-    LogLines     = (New-Object System.Collections.ArrayList)
+    # Synchronized ArrayList — runspace writes + main thread reads concurrently, must be thread-safe
+    LogLines     = [System.Collections.ArrayList]::Synchronized([System.Collections.ArrayList]::new())
     BackupFile   = $null
 })
 
@@ -108,6 +109,7 @@ $ApplyScript = {
 
     function Run-Netsh {
         param([string]$Args)
+        Log "netsh $Args"
         $r = & cmd /c "netsh $Args 2>&1"
         $script:Backup.NetSH += "$Args -> $($r -join ' ')"
     }
@@ -323,19 +325,23 @@ $ApplyScript = {
         Step 'NIC advanced properties'
         $nics = Get-NetAdapter -Physical -ErrorAction SilentlyContinue | Where-Object Status -EQ 'Up'
         foreach ($nic in $nics) {
-            Log "[NIC] $($nic.Name)"
+            Log "[NIC] $($nic.Name) - $($nic.InterfaceDescription)"
+            Log "  power management..."
             try {
                 Set-NetAdapterPowerManagement -Name $nic.Name -AllowComputerToTurnOffDevice Disabled -ArpOffload Disabled -NSOffload Disabled -SelectiveSuspend Disabled -WakeOnMagicPacket Disabled -WakeOnPattern Disabled -ErrorAction Stop
-            } catch {}
+            } catch { Log "  PowerMgmt: $($_.Exception.Message)" 'warn' }
+            Log "  enumerating advanced properties..."
             $avail = @{}
             Get-NetAdapterAdvancedProperty -Name $nic.Name -ErrorAction SilentlyContinue | ForEach-Object {
                 if ($_.DisplayName) { $avail[$_.DisplayName] = $_.DisplayValue }
             }
+            $nicChanges = 0
             foreach ($p in 'Energy Efficient Ethernet','Green Ethernet','Flow Control','Interrupt Moderation','Jumbo Packet','Large Send Offload V2 (IPv4)','Large Send Offload V2 (IPv6)','TCP Checksum Offload (IPv4)','TCP Checksum Offload (IPv6)','UDP Checksum Offload (IPv4)','UDP Checksum Offload (IPv6)','Recv Segment Coalescing (IPv4)','Recv Segment Coalescing (IPv6)','ARP Offload','NS Offload','Priority & VLAN','Shutdown WOL') {
                 if ($avail.ContainsKey($p) -and "$($avail[$p])" -ne 'Disabled') {
-                    try { Set-NetAdapterAdvancedProperty -Name $nic.Name -DisplayName $p -DisplayValue 'Disabled' -NoRestart -ErrorAction Stop } catch {}
+                    try { Set-NetAdapterAdvancedProperty -Name $nic.Name -DisplayName $p -DisplayValue 'Disabled' -NoRestart -ErrorAction Stop; $nicChanges++ } catch {}
                 }
             }
+            Log "  $nicChanges properties disabled" 'success'
         }
 
         # === [12/23] MMCSS Audio + Pro Audio =======================
@@ -402,11 +408,19 @@ $ApplyScript = {
             'MapsBroker','WMPNetworkSvc','TrkWks','TabletInputService','MessagingService','PimIndexMaintenanceSvc','OneSyncSvc','UnistoreSvc','UserDataSvc',
             'lfsvc','SCardSvr','SensrSvc','SensorService','SensorDataService','RemoteRegistry','SessionEnv','TermService','UmRdpService',
             'QWAVE','SSDPSRV','upnphost','TapiSrv','ALG','SNMP','SNMPTrap','RasMan','RasAuto')
-        foreach ($s in $svcs) { Disable-SvcSafe $s }
+        $svcCount = 0; $svcDisabled = 0
+        foreach ($s in $svcs) {
+            $svcCount++
+            $before = Get-Service -Name $s -ErrorAction SilentlyContinue
+            Disable-SvcSafe $s
+            if ($before -and (Get-Service -Name $s -ErrorAction SilentlyContinue).StartType -eq 'Disabled') { $svcDisabled++ }
+            if ($svcCount % 10 -eq 0) { Log "  progress: $svcCount / $($svcs.Count) services processed" }
+        }
         if ($ramGB -ge 16) {
             Disable-SvcSafe 'WSearch'
             Disable-SvcSafe 'SysMain'
         }
+        Log "services: $svcDisabled disabled out of $($svcs.Count) checked" 'success'
         # NetBT + TimeBroker via registry
         Set-Reg 'HKLM:\SYSTEM\CurrentControlSet\services\NetBT' 'Start' 4
         Set-Reg 'HKLM:\SYSTEM\CurrentControlSet\Services\TimeBroker' 'Start' 4
@@ -1069,8 +1083,14 @@ while ($http.IsListening -and $running) {
             'GET /'             { Send-Html $res $Html }
             'GET /api/status'   {
                 $since = [int]($req.QueryString['since'])
-                $all = @($Sync.LogLines)
-                $newLines = if ($all.Count -gt $since) { $all[$since..($all.Count-1)] } else { @() }
+                # Indexed read instead of splat-enumerate — avoids race with concurrent Add() on the synchronized ArrayList
+                $count = $Sync.LogLines.Count
+                $newLines = @()
+                if ($count -gt $since) {
+                    for ($i = $since; $i -lt $count; $i++) {
+                        try { $newLines += $Sync.LogLines[$i] } catch { break }
+                    }
+                }
                 $payload = @{
                     status    = $Sync.Status
                     step      = $Sync.StepName
@@ -1078,7 +1098,7 @@ while ($http.IsListening -and $running) {
                     stepTotal = $Sync.StepTotal
                     applied   = $Sync.AppliedKeys
                     skipped   = $Sync.SkippedKeys
-                    cursor    = $all.Count
+                    cursor    = $count
                     lines     = $newLines
                     error     = $Sync.ErrorMsg
                 }
